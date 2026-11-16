@@ -324,14 +324,23 @@ Spring 的路径匹配会优先选择字面量 `/my`，但必须实测确认过�
 | 4 | 空 items | `{"items":[]}` | 400 订单不能为空 | [04](docs/images/boundary/04-items-empty.png) |
 | 5 | body 里没有 items | `{}` | 400 订单不能为空 | [05](docs/images/boundary/05-body-empty.png) |
 | 6 | token 乱填 | `Authorization: 123456789` | 401 登录已过期 | [06](docs/images/boundary/06-token-invalid.png) |
-| 7 | 不带 `Bearer ` 前缀 | `Authorization: <原始 token>` | 200 能通过 | 待补 |
+| 7 | `Bearer ` 前缀带 / 不带 | `Authorization: Bearer <token>` 与 `Authorization: <token>` | 两种都 200 通过 | [07](docs/images/boundary/07-token-with-bearer.png) |
 | 8 | 商品名全空格 | `{"name":"   "}` | 400 商品名不能为空 | [08](docs/images/boundary/08-product-name-blank.png) |
 
 第 2 条是这轮测试最有价值的发现：`@Min(1)` 只保证不小于 1，没有上限，所以 9 亿这个请求会一路走到扣库存，被 `rows == 0` 挡住。
 **结果是对的，但代价是白查了商品、白开了事务、白拼了一次 UPDATE。** 正确做法是加 `@Max(999)`，在入口就拦掉——校验要在最便宜的地方做。
 
-第 7 条记的是 `LoginInterceptor` 的宽容之处：`startsWith("Bearer ")` 判断不成立时，token 原样使用，所以不带前缀也能登录。
-这不算漏洞（token 依然要有效），但接口文档里应当统一约定一种写法。
+第 7 条记的是 `LoginInterceptor` 的宽容之处：
+
+```java
+if (token.startsWith("Bearer ")) {
+    token = token.substring(7);   // 有前缀才截
+}
+User user = userService.getByToken(token);   // 没前缀就原样查
+```
+
+带前缀和不带前缀都能通过，因为只有判断成立时才截断，不成立时 token 原样使用。
+这不算漏洞（token 本身仍然要有效），但接口约定上应当统一推荐一种写法，避免调用方各写各的。
 
 ## 踩过的坑
 
