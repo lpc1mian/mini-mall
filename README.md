@@ -2,7 +2,7 @@
 
 一个从零手写的单体商城后端，基于 Spring Boot 3 + MyBatis-Plus + MySQL。
 
-包含 **3 张业务表、11 个接口**，覆盖注册登录、Token 鉴权、商品查询、下单、订单查询。
+包含 **4 张表、11 个接口**，覆盖注册登录、Token 鉴权、商品查询、下单、订单查询。
 重点不在于功能数量，而在于把几件后端必须做对的事做对：**事务边界、并发下不超卖、鉴权不越权、异常统一收口、分页真的分页。**
 
 所有接口都有真实测试截图，见 [测试与截图](#测试与截图)。
@@ -64,51 +64,28 @@ src/main/java/com/demo/minimall
 └── vo                            返回给前端的组合对象
 ```
 
+根目录另有 `schema.sql`（建库建表 + 演示数据）和 `docs/images/`（接口与边界测试截图）。
+
 ## 快速启动
 
 **1. 建库建表**
 
-```sql
-CREATE DATABASE mini_mall DEFAULT CHARACTER SET utf8mb4;
+四张表、演示账号、8 件商品都在根目录的 `schema.sql` 里，一条命令执行：
 
-CREATE TABLE mall_product (
-    id          INT PRIMARY KEY AUTO_INCREMENT,
-    name        VARCHAR(100)   NOT NULL,
-    price       DECIMAL(10, 2) NOT NULL,
-    stock       INT            NOT NULL DEFAULT 0,
-    create_time DATETIME       DEFAULT CURRENT_TIMESTAMP
-) COMMENT '商品表';
-
-CREATE TABLE mall_order (
-    id           INT PRIMARY KEY AUTO_INCREMENT,
-    user_id      INT            NOT NULL,
-    order_no     VARCHAR(32)    NOT NULL UNIQUE,
-    total_amount DECIMAL(10, 2) NOT NULL,
-    status       INT            NOT NULL DEFAULT 0 COMMENT '0待支付 1已支付 2已发货 3已完成 4已取消',
-    create_time  DATETIME       DEFAULT CURRENT_TIMESTAMP,
-    KEY idx_user_id (user_id)
-) COMMENT '订单表';
-
-CREATE TABLE mall_order_item (
-    id            INT PRIMARY KEY AUTO_INCREMENT,
-    order_id      INT            NOT NULL,
-    product_id    INT            NOT NULL,
-    product_name  VARCHAR(100)   NOT NULL,
-    product_price DECIMAL(10, 2) NOT NULL,
-    quantity      INT            NOT NULL,
-    KEY idx_order_id (order_id)
-) COMMENT '订单明细表';
-
-INSERT INTO mall_product (name, price, stock) VALUES
-('iPhone 15',    5999.00, 100),
-('小米 14',      3999.00,  50),
-('华为 Mate 60', 6499.00,  30),
-('机械键盘',       399.00, 200),
-('罗技鼠标',       199.00, 150),
-('27寸显示器',    1299.00,  40),
-('蓝牙耳机',       499.00,  80),
-('手机壳',          39.00, 500);
+```bash
+mysql -uroot -p < schema.sql
 ```
+
+也可以用 Navicat / DataGrip 打开这个文件直接运行。脚本是幂等的（`IF NOT EXISTS` + `INSERT IGNORE`），重复执行不会清掉你本地的订单数据。
+
+**演示账号**
+
+| 用户名 | 密码 | 用途 |
+|---|---|---|
+| `test` | `123456` | 主账号，用来演示「我的订单」 |
+| `other` | `123456` | 第二账号，用来验证越权：用 `test` 的 token 查 `other` 的订单，应返回「无权限查看」 |
+
+> 密码明文存储。这是练手项目有意停下的边界，不是可上线的方案 —— 真实项目应存 BCrypt 哈希。
 
 **2. 配置数据库连接**
 
@@ -278,9 +255,20 @@ public MybatisPlusInterceptor mybatisPlusInterceptor() {
 
 ## 数据库设计
 
-三张表，**故意不加物理外键**。
+四张表：`mall_user`、`mall_product`、`mall_order`、`mall_order_item`。建表脚本见 `schema.sql`。
+
+**业务表故意不加物理外键。**
 
 理由：外键会在插入明细时对主表加隐式共享锁，高并发下容易出现锁等待。约束改由应用层保证（下单时先校验商品存在）。这也是一个真实踩过的坑，见下节。
+
+三处关键索引：
+
+| 表 | 索引 | 作用 |
+|---|---|---|
+| `mall_user` | `UNIQUE uk_username` | 登录按用户名查，同时保证用户名不重复 |
+| `mall_order` | `UNIQUE order_no` | 订单号唯一。幂等方案落地时，这是最后一道防线 |
+| `mall_order` | `idx_user_id` | 「我的订单」按 `user_id` 过滤，否则全表扫 |
+| `mall_order_item` | `idx_order_id` | 详情页按 `order_id` 捞明细 |
 
 ## 测试与截图
 
@@ -353,7 +341,7 @@ User user = userService.getByToken(token);   // 没前缀就原样查
 | 验证回滚时靠记忆记库存 | 以为没回滚，其实是之前的测试数据改了基线 | 实验前用一条 SQL 拍快照（订单数、明细数、各商品库存），前后对比。**不记绝对值，只比差值** |
 | 改注解后没有重启 | 注释掉 `@Transactional` 后行为完全没变，差点得出错误结论 | IDEA 热加载只替换方法体，**不重建 Spring 代理**。改注解必须真正重启 |
 | 嵌套对象校验静默失效 | 只在 `items` 上加 `@Valid`，内层 `quantity = 0` 不报错，接口返回 200 | `@Valid` 不会自动向下传递，必须内外都标 |
-| 外键引发锁等待 | 并发插入明细时 `1205 Lock wait timeout`（50 秒） | 物理外键对主表加隐式共享锁。本项目三张表不加外键，约束放到应用层 |
+| 外键引发锁等待 | 并发插入明细时 `1205 Lock wait timeout`（50 秒） | 物理外键对主表加隐式共享锁。本项目四张表都不加外键，约束放到应用层 |
 
 ## 已知限制
 

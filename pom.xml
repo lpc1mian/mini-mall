@@ -8,7 +8,7 @@
         <version>3.3.4</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
-    <groupId>com.qyer</groupId>
+    <groupId>com.demo</groupId>
     <artifactId>mini-mall</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>mini-mall</name>
